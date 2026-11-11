@@ -1,0 +1,90 @@
+\set ON_ERROR_STOP on
+create function pg_temp.assert_true(ok boolean,label text) returns void language plpgsql as $$begin if ok is distinct from true then raise exception 'FAIL: %',label;end if;raise notice 'PASS: %',label;end$$;
+create function pg_temp.denied(statement text,states text[] default array['42501','23503','23514','P0001']) returns void language plpgsql as $$declare rejected boolean:=false;begin begin execute statement;exception when others then if sqlstate=any(states) then rejected=true;else raise;end if;end;if not rejected then raise exception 'FAIL: operation unexpectedly allowed: %',statement;end if;raise notice 'PASS: rejected forbidden operation';end$$;
+insert into auth.users values('11111111-1111-4111-8111-111111111111'),('22222222-2222-4222-8222-222222222222'),('33333333-3333-4333-8333-333333333333');
+set role authenticated;
+select set_config('request.jwt.claim.sub','11111111-1111-4111-8111-111111111111',false);
+select public.create_organization('Synthetic A','EUR','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+select public.create_organization('Synthetic A','EUR','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+select pg_temp.assert_true((select count(*)=1 from public.organization_members),'onboarding is idempotent');
+insert into public.customers(id,organization_id,display_name) values('aaaaaaaa-0000-4000-8000-000000000001','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','Customer A');
+insert into public.contacts(id,organization_id,customer_id,full_name) values('aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','aaaaaaaa-0000-4000-8000-000000000001','Contact A');
+insert into public.offers(id,organization_id,customer_id,title,amount,currency,status,sent_at) values('aaaaaaaa-0000-4000-8000-000000000003','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','aaaaaaaa-0000-4000-8000-000000000001','Offer A','9007199254740.1234','EUR','sent',now()-interval '10 days');
+select pg_temp.assert_true((select exact_amount='9007199254740.1234' from public.offer_records limit 1),'exact decimal read view');
+select set_config('request.jwt.claim.sub','22222222-2222-4222-8222-222222222222',false);
+select public.create_organization('Synthetic B','RON','bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb');
+insert into public.customers(id,organization_id,display_name) values('bbbbbbbb-0000-4000-8000-000000000001','bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb','Customer B');
+insert into public.contacts(id,organization_id,customer_id,full_name) values('bbbbbbbb-0000-4000-8000-000000000002','bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb','bbbbbbbb-0000-4000-8000-000000000001','Contact B');
+insert into public.offers(id,organization_id,customer_id,title,amount,currency) values('bbbbbbbb-0000-4000-8000-000000000003','bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb','bbbbbbbb-0000-4000-8000-000000000001','Offer B',12,'RON');
+select set_config('request.jwt.claim.sub','11111111-1111-4111-8111-111111111111',false);
+select pg_temp.assert_true((select count(*)=0 from public.customers where organization_id='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'),'A cannot read B customers');
+select pg_temp.assert_true((select count(*)=0 from public.contacts where organization_id='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'),'A cannot read B contacts');
+select pg_temp.assert_true((select count(*)=0 from public.offer_records where organization_id='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'),'invoker view isolates B offers');
+with changed as(update public.customers set display_name='forged' where id='bbbbbbbb-0000-4000-8000-000000000001' returning id) select pg_temp.assert_true(count(*)=0,'A cannot update B') from changed;
+select pg_temp.denied($q$delete from public.offers where id='bbbbbbbb-0000-4000-8000-000000000003'$q$);
+select pg_temp.denied($q$insert into public.customers(organization_id,display_name) values('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb','forged')$q$);
+select pg_temp.denied($q$update public.customers set organization_id='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' where id='aaaaaaaa-0000-4000-8000-000000000001'$q$);
+select pg_temp.denied($q$insert into public.contacts(organization_id,customer_id,full_name) values('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','bbbbbbbb-0000-4000-8000-000000000001','cross')$q$);
+select pg_temp.denied($q$insert into public.offers(organization_id,customer_id,primary_contact_id,title,amount,currency) values('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','aaaaaaaa-0000-4000-8000-000000000001','bbbbbbbb-0000-4000-8000-000000000002','cross',1,'EUR')$q$);
+select pg_temp.denied($q$insert into public.organization_members values('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb','11111111-1111-4111-8111-111111111111','owner',now())$q$);
+select pg_temp.denied($q$update public.organization_members set role='owner'$q$);
+select pg_temp.denied($q$delete from public.organization_members$q$);
+select pg_temp.denied($q$insert into public.audit_events(organization_id,entity_type,entity_id,action) values('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','forged',gen_random_uuid(),'insert')$q$);
+select pg_temp.denied('update public.audit_events set action=''forged''');
+select pg_temp.denied('delete from public.audit_events');
+select pg_temp.denied($q$select public.stage_import('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb','bad.csv',repeat('a',64),repeat('b',64),'[{}]')$q$);
+select pg_temp.denied($q$select public.create_organization('steal','EUR','bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb')$q$);
+insert into public.activities(organization_id,offer_id,actor_user_id,type,description) values('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','aaaaaaaa-0000-4000-8000-000000000003','22222222-2222-4222-8222-222222222222','email_logged','Synthetic manual log');
+select pg_temp.assert_true((select actor_user_id=auth.uid() from public.activities limit 1),'forged actor overwritten with authenticated identity');
+select pg_temp.denied($q$insert into public.activities(organization_id,offer_id,type,description) values('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','aaaaaaaa-0000-4000-8000-000000000003','status_change','forged')$q$);
+update public.offers set status='won',closed_at=now() where id='aaaaaaaa-0000-4000-8000-000000000003';
+select pg_temp.assert_true((select count(*)=1 from public.activities where type='status_change'),'status changes create one activity');
+select pg_temp.assert_true((public.dashboard_metrics('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa')->'values'->0->>'won')='9007199254740.1234','aggregates preserve decimal precision');
+select pg_temp.assert_true((public.dashboard_metrics('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa')->>'followup')::int=0,'closed offers excluded from pending');
+select pg_temp.denied($q$insert into public.offers(organization_id,customer_id,title,amount,currency,status) values('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','aaaaaaaa-0000-4000-8000-000000000001','invalid',-1,'EUR','sent')$q$);
+-- 100-row atomic import and idempotent retries.
+select public.stage_import('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','100.csv',repeat('1',64),repeat('2',64),(select jsonb_agg(jsonb_build_object('customer_name','Import Customer '||n,'contact_name','Contact '||n,'contact_email','person'||n||'@example.invalid','offer_title','Import Offer '||n,'offer_value','1234.5678','currency',case when n%2=0 then 'RON' else 'EUR' end,'offer_status','sent','sent_at','2026-01-01','external_reference','batch100-'||n,'notes','synthetic')) from generate_series(1,100)n)) as job \gset
+select pg_temp.assert_true((public.commit_import(:'job','skip')->>'created')::int=100,'100-row transactional import');
+select pg_temp.assert_true((public.commit_import(:'job','skip')->>'created')::int=100,'identical commit returns original result');
+select pg_temp.assert_true((select count(*)=101 from public.offers),'retry creates no duplicates');
+select pg_temp.assert_true((select count(*)=0 from public.import_rows where job_id=:'job'),'success cleans staging');
+select pg_temp.assert_true((select count(*)=2 from jsonb_array_elements(public.dashboard_metrics('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa')->'values')),'currencies remain separate');
+select pg_temp.assert_true((public.dashboard_metrics('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb')->>'total')::int=0,'RPC cannot aggregate another tenant');
+select public.stage_import('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','1000.csv',repeat('3',64),repeat('4',64),(select jsonb_agg(jsonb_build_object('customer_name','Scale Customer','contact_name','','contact_email','','offer_title','Scale Offer '||n,'offer_value','1.0000','currency','EUR','offer_status','draft','sent_at','','external_reference','batch1000-'||n,'notes','')) from generate_series(1,1000)n)) as bigjob \gset
+select pg_temp.assert_true((public.commit_import(:'bigjob','skip')->>'created')::int=1000,'1000-row transactional import');
+select public.stage_import('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','rollback.csv',repeat('5',64),repeat('6',64),'[{"customer_name":"Rollback customer","offer_title":"Good row","offer_value":"2","currency":"EUR","offer_status":"draft","sent_at":"","external_reference":"rollback-1"},{"customer_name":"Rollback customer","offer_title":"Invalid row","offer_value":"-3","currency":"EUR","offer_status":"draft","sent_at":""}]') as badjob \gset
+select pg_temp.denied(format('select public.commit_import(%L,''skip'')',:'badjob'));
+select pg_temp.assert_true((select count(*)=0 from public.customers where display_name='Rollback customer'),'failed transaction leaves no orphan customer');
+select pg_temp.assert_true((select status='validated' from public.import_jobs where id=:'badjob'),'failed transaction leaves retryable validated job');
+-- Direct SQL bypass of missing UI role controls is rejected by DB policies.
+reset role;
+insert into public.organization_members(organization_id,user_id,role) values('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','33333333-3333-4333-8333-333333333333','member');
+select pg_temp.denied($q$delete from public.organization_members where organization_id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' and role='owner'$q$);
+set role authenticated;
+select set_config('request.jwt.claim.sub','33333333-3333-4333-8333-333333333333',false);
+with changed as(update public.organizations set name='forged' where id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' returning id) select pg_temp.assert_true(count(*)=0,'member cannot change organization settings') from changed;
+select pg_temp.denied($q$update public.organization_members set role='admin' where user_id=auth.uid()$q$);
+select pg_temp.denied(format('select public.commit_import(%L,''skip'')',:'badjob'));
+set role anon;
+select set_config('request.jwt.claim.sub','',false);
+select pg_temp.denied('select * from public.customers');
+select pg_temp.denied('select * from public.offers');
+select pg_temp.denied('select * from public.offer_records');
+select pg_temp.denied($q$select public.create_organization('anon','EUR',gen_random_uuid())$q$);
+reset role;
+select pg_temp.assert_true((select bool_and(relrowsecurity) from pg_class where relnamespace='public'::regnamespace and relkind='r'),'all exposed tables have RLS');
+select pg_temp.assert_true((select count(*)=0 from pg_proc where pronamespace='public'::regnamespace and prosecdef),'no exposed security-definer functions');
+select pg_temp.assert_true((select count(*)>0 from public.audit_events where actor_user_id='11111111-1111-4111-8111-111111111111'),'audit attributes real actor');
+select pg_temp.assert_true((select count(*)=0 from public.audit_events where 'notes'=any(changed_fields) or 'email'=any(changed_fields)),'audit avoids sensitive field content');
+select 'SQL integration completed: actual PostgreSQL role/RLS, not Supabase Auth or HTTP.' as result;
+
+update public.import_jobs set expires_at=now()-interval '1 day' where id=:'badjob';
+select private.cleanup_imports();
+select pg_temp.assert_true((select count(*)=0 from public.import_rows where job_id=:'badjob'),'manual TTL maintenance removes expired staging');
+select pg_temp.assert_true((select status='expired' from public.import_jobs where id=:'badjob'),'maintenance retains expired job metadata');
+select pg_temp.assert_true((select count(*)>0 from public.audit_events where entity_type='organization_members'),'membership operations audited');
+explain (analyze,buffers,costs off) select id from public.offers where organization_id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' and status='sent' and archived_at is null order by sent_at limit 10;
+
+update public.organization_members set role='admin' where organization_id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' and user_id='33333333-3333-4333-8333-333333333333';
+select pg_temp.assert_true((select role='admin' from public.organization_members where organization_id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' and user_id='33333333-3333-4333-8333-333333333333'),'privileged future role maintenance works and audits');
+select pg_temp.denied($q$update public.organization_members set role='member' where organization_id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' and user_id='11111111-1111-4111-8111-111111111111'$q$);
