@@ -13,36 +13,42 @@
     "typecheck": "next typegen && tsc --noEmit",
     "test": "vitest run tests/unit",
     "test:e2e": "playwright test",
-    "test:integration": "bash tests/integration/run-local.sh",
-    "test:connected": "bash tests/integration/run-connected.sh"
+    "test:integration": "node tests/integration/run-local.mjs",
+    "test:connected": "node tests/integration/run-local.mjs --connected",
+    "db:migrate": "node scripts/migrate.mjs",
+    "test:hosted": "node scripts/test-hosted.mjs"
   },
   "dependencies": {
-    "@supabase/ssr": "0.12.7",
-    "@supabase/supabase-js": "2.119.0",
     "csv-parse": "7.0.3",
     "next": "16.4.6",
+    "pg": "8.23.1",
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "read-excel-file": "9.3.15",
     "server-only": "0.0.1",
+    "set-cookie-parser": "3.2.2",
     "yauzl": "3.4.0",
     "zod": "4.6.7"
   },
   "devDependencies": {
     "@playwright/test": "1.65.0",
     "@types/node": "26.6.6",
+    "@types/pg": "8.23.1",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
+    "@types/set-cookie-parser": "2.4.10",
     "@types/yauzl": "3.4.0",
+    "better-auth": "1.7.21",
     "eslint": "9.39.5",
     "eslint-config-next": "16.4.6",
     "prettier": "3.10.0",
-    "supabase": "3.1.0",
     "typescript": "6.0.3",
     "vitest": "5.1.0"
   },
   "type": "module",
   "overrides": {
-    "minimatch": "11.0.8"
+    "minimatch": "11.0.8",
+    "better-auth": "1.7.21",
+    "zod": "4.6.7"
   }
 }

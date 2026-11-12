@@ -14,29 +14,24 @@ export default async function Activity({
 }: {
   searchParams: Promise<{ page?: string; tab?: string }>;
 }) {
-  const { client, org, user } = await workspace();
+  const { store, user } = await workspace();
   const s = await searchParams;
   const page = Math.max(1, Math.min(10000, Math.floor(Number(s.page)) || 1));
   const audit = s.tab === "audit";
-  const { data, error, count } = await client
-    .from(audit ? "audit_events" : "activities")
-    .select("*", { count: "exact" })
-    .eq("organization_id", org.id)
-    .order("occurred_at", { ascending: false })
-    .order("id")
-    .range((page - 1) * 30, page * 30 - 1);
-  if (error) throw new Error("History unavailable");
+  const { data, count } = await store.history(audit, page);
   const rows = (data || []).map((a) => ({
     ...a,
     heading:
       "entity_type" in a
-        ? `${names[a.entity_type] || "Record"} · ${a.action === "insert" ? "Created" : "Updated"}`
-        : a.type.replaceAll("_", " "),
+        ? `${names[a.entity_type || ""] || "Record"} · ${a.action === "insert" ? "Created" : "Updated"}`
+        : (a.type || "Activity").replaceAll("_", " "),
     description:
       "changed_fields" in a
-        ? a.changed_fields.length
+        ? a.changed_fields?.length
           ? "Changed fields: " +
-            a.changed_fields.map((f) => f.replaceAll("_", " ")).join(", ")
+            a.changed_fields
+              .map((f: string) => f.replaceAll("_", " "))
+              .join(", ")
           : "Record created or operation recorded"
         : a.description,
     offerId: "offer_id" in a ? a.offer_id : null,

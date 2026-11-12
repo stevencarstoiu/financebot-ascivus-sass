@@ -5,7 +5,7 @@ import { cookies } from "next/headers";
 import { identity } from "@/lib/workspace";
 import { currency } from "@/lib/validation";
 export async function createOrganization(form: FormData) {
-  const { client } = await identity();
+  const { store } = await identity();
   const parsed = z
     .object({
       name: z.string().trim().min(2).max(120),
@@ -14,15 +14,18 @@ export async function createOrganization(form: FormData) {
     })
     .safeParse(Object.fromEntries(form));
   if (!parsed.success) redirect("/onboarding?message=Check+name+and+currency");
-  const { data, error } = await client.rpc("create_organization", {
-    p_name: parsed.data.name,
-    p_currency: parsed.data.currency,
-    p_request: parsed.data.request,
-  });
-  if (error)
+  let data = "";
+  try {
+    data = await store.createOrganization(
+      parsed.data.name,
+      parsed.data.currency,
+      parsed.data.request,
+    );
+  } catch {
     redirect(
       "/onboarding?message=Could+not+create+organization.+Check+database+setup.",
     );
+  }
   (await cookies()).set("sales-org", data, {
     httpOnly: true,
     sameSite: "lax",

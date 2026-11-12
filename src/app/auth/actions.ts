@@ -1,66 +1,107 @@
 "use server";
 import { redirect } from "next/navigation";
-import { headers } from "next/headers";
+import { headers, cookies } from "next/headers";
 import { z } from "zod";
-import { db, configured } from "@/lib/supabase";
+import { auth, authConfigured } from "@/lib/auth/server";
 export async function authenticate(form: FormData) {
   const kind = String(form.get("kind"));
-  const path = ["signup", "forgot-password", "reset-password"].includes(kind)
+  const path = [
+    "signup",
+    "verify-email",
+    "forgot-password",
+    "reset-password",
+  ].includes(kind)
     ? "/" + kind
     : "/login";
-  const fail = (m: string) =>
+  const fail = (m: string): never =>
     redirect(path + "?message=" + encodeURIComponent(m));
-  if (!configured()) fail("Authentication unavailable in this environment");
-  const origin = process.env.NEXT_PUBLIC_SITE_URL;
-  if (!origin) fail("Site URL is not configured");
-  const requestOrigin = (await headers()).get("origin");
-  if (requestOrigin && requestOrigin !== new URL(origin!).origin)
+  if (!authConfigured()) fail("Authentication unavailable in this environment");
+  if ((await headers()).get("origin") !== new URL(process.env.SITE_URL!).origin)
     fail("Request origin is not allowed");
-  const client = await db();
   const email = z.email().safeParse(form.get("email"));
   const password = z.string().min(12).max(128).safeParse(form.get("password"));
-  if (kind !== "reset-password" && !email.success)
-    fail("Enter a valid email address");
-  if (kind !== "forgot-password" && !password.success)
-    fail("Use a password of 12–128 characters");
+  const otp = z
+    .string()
+    .regex(/^\d{6}$/)
+    .safeParse(form.get("otp"));
+  if (!email.success) fail("Enter a valid email address");
+  const client = auth();
   if (kind === "signup") {
-    const { error } = await client.auth.signUp({
+    if (!password.success) fail("Use a password of 12–128 characters");
+    const { error } = await client.signUp.email({
       email: email.data!,
       password: password.data!,
-      options: { emailRedirectTo: origin + "/auth/callback" },
+      name: String(form.get("display_name") || "Sales user").slice(0, 120),
     });
     if (error) fail("Unable to create account. Try again later.");
-    redirect("/login?message=Check+your+email+to+confirm+your+account");
-  }
-  if (kind === "forgot-password") {
-    await client.auth.resetPasswordForEmail(email.data!, {
-      redirectTo: origin + "/auth/callback?next=/reset-password",
+    (await cookies()).set("auth-email", email.data!, {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      maxAge: 600,
+      path: "/",
     });
     redirect(
-      "/forgot-password?message=If+the+account+exists%2C+check+your+email+for+a+recovery+link",
+      "/verify-email?message=Check+your+email+for+the+verification+code",
+    );
+  }
+  if (kind === "verify-email") {
+    if (!otp.success) fail("Enter the six-digit verification code");
+    const { error } = await client.emailOtp.verifyEmail({
+      email: email.data!,
+      otp: otp.data!,
+    });
+    if (error) fail("Code invalid or expired. Request a new code.");
+    redirect("/login?message=Email+verified.+Please+sign+in");
+  }
+  if (kind === "forgot-password") {
+    await client.emailOtp.sendVerificationOtp({
+      email: email.data!,
+      type: "forget-password",
+    });
+    (await cookies()).set("auth-email", email.data!, {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      maxAge: 600,
+      path: "/",
+    });
+    redirect(
+      "/reset-password?message=If+the+account+exists%2C+check+your+email+for+the+reset+code",
     );
   }
   if (kind === "reset-password") {
-    const {
-      data: { user },
-    } = await client.auth.getUser();
-    if (!user) fail("Open a valid recovery link first");
-    const { error } = await client.auth.updateUser({
+    if (!password.success || !otp.success)
+      fail("Enter the reset code and a password of 12–128 characters");
+    const { error } = await client.emailOtp.resetPassword({
+      email: email.data!,
+      otp: otp.data!,
       password: password.data!,
     });
-    if (error) fail("Password could not be updated. Request a new link.");
-    await client.auth.signOut();
-    redirect("/login?message=Password+updated.+Please+sign+in");
+    if (error) fail("Code invalid or expired. Request a new reset code.");
+    await client.signOut();
+    redirect(
+      "/login?message=Password+updated.+All+previous+sessions+must+sign+in+again",
+    );
   }
-  const { error } = await client.auth.signInWithPassword({
+  if (kind === "resend") {
+    await client.emailOtp.sendVerificationOtp({
+      email: email.data!,
+      type: "email-verification",
+    });
+    redirect(
+      "/verify-email?message=If+eligible%2C+a+new+code+has+been+requested",
+    );
+  }
+  if (!password.success) fail("Use a password of 12–128 characters");
+  const { error } = await client.signIn.email({
     email: email.data!,
     password: password.data!,
   });
-  if (error) fail("Sign-in failed. Check credentials and confirm your email.");
+  if (error) fail("Sign-in failed. Check credentials and verify your email.");
   redirect("/app");
 }
 export async function logout() {
-  const client = await db();
-  await client.auth.signOut();
+  await auth().signOut();
   redirect("/login");
 }

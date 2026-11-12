@@ -1,0 +1,27 @@
+# CANDIDATE ONLY: do not apply until current Free limits and account billing controls are verified.
+# No paid fallback, managed database, disk, worker, cron or automatic deployment is declared.
+services:
+  - type: web
+    name: ascivus-sales-preview
+    runtime: node
+    plan: free
+    region: frankfurt
+    repo: https://github.com/stevencarstoiu/financebot-ascivus-sass
+    branch: phase-1-neon-free
+    autoDeploy: false
+    buildCommand: npm ci && npm run build
+    startCommand: npm run start -- --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: 24.22.1
+      - key: NODE_OPTIONS
+        value: --max-old-space-size=384
+      - key: SITE_URL
+        sync: false
+      - key: NEON_AUTH_BASE_URL
+        sync: false
+      - key: NEON_AUTH_COOKIE_SECRET
+        sync: false
+      - key: DATABASE_URL
+        sync: false

@@ -1,25 +1,15 @@
-# Import contract
+# Import contract (Neon)
 
-`POST /api/imports` requires a verified session, membership, same-origin request and import entitlement. Bounded multipart Route Handler (not a raised global Server Action limit), Node runtime, maxDuration 30s. Files are parsed again on commit, so a client cannot edit a preview response and bypass validation.
+Authenticated same-origin bounded multipart POST `/api/imports`. Preview writes no commercial data. Commit reparses/revalidates the file and calls parameterized Sales procedures inside one verified actor/tenant transaction. No raw binaries are persisted.
 
-CSV: UTF-8 with optional BOM; detected comma/semicolon/tab; consistent columns and CSV quoting via csv-parse. Headers unique/nonempty. XLSX: read-excel-file 9.3.15 after yauzl 3.4.0 ZIP preflight. `.xls`, `.xlsm`, invalid signatures, empty/corrupt/encrypted/formula/external/macro workbooks are rejected. Literal formula-looking CSV text is never executed and is safely escaped on export. See SECURITY for byte/row/cell/ZIP limits.
+CSV: UTF-8/BOM, comma/semicolon/tab detection, consistent quoting/columns via csv-parse. XLSX: maintained read-excel-file after ZIP preflight. Reject .xls/.xlsm, invalid signatures, corruption/encryption, formulas/macros/embedded objects/external links, DTD/entities and oversized dimensions. Limits: 5 MB input, 1,000 rows, 50 columns, 5 sheets, 2,000 ZIP entries, 20 MB expanded total, 8 MB per entry, ratio 150, 50,050 worksheet cells. Upload/body deadline and PostgreSQL statement/lock timeouts bound resource use. Hosting may impose smaller limits: verify before publishing size promises.
 
-Map `customer_name`, `offer_title`, `offer_value` (required); optional `contact_name`, `contact_email`, `currency`, `offer_status`, `sent_at`, `external_reference`, `notes`. One source column per destination. Missing status defaults to draft, missing currency to organization default; this is disclosed in the UI. Email requires contact name. Dates are strict YYYY-MM-DD. Non-draft rows require sent date. Draft dates are cleared. XLSX date cells become ISO calendar dates.
+Required mappings: customer_name, offer_title, offer_value. Optional: contact_name/email, currency, offer_status, sent_at, external_reference, notes. Unmapped currency defaults to organization currency; status defaults to draft. Dates are strict YYYY-MM-DD. Non-draft requires sent date. Email requires contact name.
 
-Strict numeric mode allows point decimals without grouping, rejecting separator + exactly three trailing digits as ambiguous. EU mode explicitly uses period groups/comma decimal; US mode uses comma groups/point decimal. XLSX stored numeric literals use point decimals: choose US mode. No exponent, negative, currency-symbol or precision-losing JS Number coercion. Up to 14 integer and 4 fractional digits, stored numeric(18,4).
+Strict number mode rejects ambiguous separator + three digits; EU explicitly uses grouped periods/comma decimal; US uses grouped commas/point decimal. XLSX numeric literals use point decimals. No exponent, negative value, fabricated conversion or JS Number coercion. Preserve up to 14 integer/four fractional digits.
 
-Preview shows raw first 20 rows, mappings, all-row issues and within-file duplicates. It writes no commercial data. Error CSV includes row numbers/issues, formula-safe quoting. Commit revalidates every row; any invalid row rejects the whole file.
+Preview shows 20 rows and all-row issues/within-file duplicates. Safe downloadable issue CSV contains row numbers and messages. Dedupe: org-scoped unique external reference first; otherwise exact normalized active customer, offer title, amount, currency and sent timestamp. No fuzzy merging. Skip default; update explicit replacement; create allows separate heuristic matches but skips a colliding external reference. Contact match stays inside the chosen customer/tenant.
 
-Deduplication: unique external reference per organization first; otherwise exact active normalized customer name + title + exact amount + currency + sent timestamp. Names match conservatively by trim/lower; no fuzzy merging. Multiple exact customer candidates choose earliest stable record; review duplicates before using update. Skip is default. Update explicitly replaces matched offer values; create makes a separate offer for heuristic matches, but skips an existing unique external reference. Contacts match exact customer/name/email. No orphan customer/contact records for skipped offers.
+Organization/job locks and file+mapping+locale+sheet+conflict SHA-256 fingerprints make retries idempotent. All 1,000 rows commit or roll back together, including audit. The application stages and commits in one transaction; failed application imports leave no staged job/orphans. Directly staged DB test jobs remain retryable and expire. Metadata/history is retained; successful staging is immediately deleted.
 
-SHA-256 file + mapping/locale/worksheet/conflict choice fingerprints and initiating user scope identify a staged job. An organization lock prevents concurrent duplicate staging. Repeated commit locks the job and returns its stored original result; retries cannot multiply records. One transaction commits up to 1,000 rows. No partial-success mode. Job status/count/result metadata is retained; staging is deleted immediately on success.
-
-Staging TTL is 24 hours. Privileged manual maintenance (only the NEW target database):
-
-```sql
-select private.cleanup_imports();
-```
-
-Schedule that command through a separately configured privileged database scheduler. Ordinary clients cannot execute it. No automatic schedule is provisioned. Binary files never persist. Expired staging can remain physically present until maintenance runs; TTL alone does not claim deletion.
-
-Next route accepts 5 MB; a hosting provider may cap request bodies below that (e.g. some Vercel functions). Verify target plan/runtime limits before advertising 5 MB in hosted Preview. If lower, reduce the product limit or implement a separately reviewed bounded object upload; no unavailable upload infrastructure is simulated.
+TTL is 24h. No scheduler is created. An authorized administrator on the designated Sales database can run `select sales_private.cleanup_imports();`. Schedule explicitly using an approved free mechanism or perform manually. Do not add a paid cron/worker. Until maintenance runs, expired staging may remain physically present. Never claim TTL alone deletes it automatically.

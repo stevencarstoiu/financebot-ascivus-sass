@@ -1,6 +1,7 @@
+import { AccessError } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { workspace } from "@/lib/workspace";
+import { apiWorkspace } from "@/lib/workspace";
 import {
   parseFile,
   hash,
@@ -18,10 +19,25 @@ async function boundedBody(request: NextRequest) {
     throw new Error("Upload exceeds 5 MB limit");
   const reader = request.body?.getReader();
   if (!reader) throw new Error("Empty request");
+  const deadline = Date.now() + 15000;
   let size = 0;
   const chunks: Uint8Array[] = [];
   while (true) {
-    const { value, done } = await reader.read();
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      await reader.cancel();
+      throw new Error("Upload timed out");
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const { value, done } = await Promise.race([
+      reader.read(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          void reader.cancel();
+          reject(new Error("Upload timed out"));
+        }, remaining);
+      }),
+    ]).finally(() => clearTimeout(timer));
     if (done) break;
     size += value.length;
     if (size > limit) {
@@ -38,17 +54,14 @@ async function boundedBody(request: NextRequest) {
 }
 export async function POST(request: NextRequest) {
   const origin = request.headers.get("origin");
-  if (
-    !origin ||
-    origin !== new URL(process.env.NEXT_PUBLIC_SITE_URL || request.url).origin
-  )
+  if (!origin || origin !== new URL(process.env.SITE_URL || request.url).origin)
     return NextResponse.json(
       { error: "Request origin is not allowed" },
       { status: 403 },
     );
-  const { client, org } = await workspace();
-  requireEntitlement("imports");
   try {
+    const { store, org } = await apiWorkspace();
+    requireEntitlement("imports");
     const form = await boundedBody(request);
     const file = form.get("file");
     if (!(file instanceof File)) throw new Error("Select a file");
@@ -101,30 +114,13 @@ export async function POST(request: NextRequest) {
       const conflict = z
         .enum(["skip", "update", "create"])
         .parse(form.get("conflict") || "skip");
-      const { data: job, error: stageError } = await client.rpc(
-        "stage_import",
-        {
-          p_org: org.id,
-          p_name: file.name.split(/[/\\]/).pop()!.slice(0, 200),
-          p_fingerprint: hash(buffer),
-          p_mapping: hash(
-            JSON.stringify({ mapping, locale, sheetIndex, conflict }),
-          ),
-          p_rows: validation.rows.map((r) => r.data),
-        },
+      const { job, result } = await store.commitImport(
+        file.name.split(/[/\\]/).pop()!.slice(0, 200),
+        hash(buffer),
+        hash(JSON.stringify({ mapping, locale, sheetIndex, conflict })),
+        validation.rows.map((r) => r.data),
+        conflict,
       );
-      if (stageError)
-        throw new Error(
-          "Could not stage import. Check permissions and database setup.",
-        );
-      const { data: result, error } = await client.rpc("commit_import", {
-        p_job: job,
-        p_conflict: conflict,
-      });
-      if (error)
-        throw new Error(
-          "Import rolled back. Check references, fields and usage limits; retry safely.",
-        );
       return NextResponse.json(
         { job, result },
         { headers: { "Cache-Control": "no-store" } },
@@ -149,10 +145,15 @@ export async function POST(request: NextRequest) {
           error instanceof z.ZodError
             ? "Invalid mapping, worksheet or option"
             : error instanceof Error
-              ? error.message
+              ? "code" in error
+                ? "Import rolled back. Check permissions, fields and usage limits."
+                : error.message
               : "Import unavailable",
       },
-      { status: 400, headers: { "Cache-Control": "no-store" } },
+      {
+        status: error instanceof AccessError ? error.status : 400,
+        headers: { "Cache-Control": "no-store" },
+      },
     );
   }
 }

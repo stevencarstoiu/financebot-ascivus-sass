@@ -1,147 +1,143 @@
-import { workbook } from "../helpers/workbook";
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page, type BrowserContext } from "@playwright/test";
 import { randomUUID } from "node:crypto";
-async function emailLink(email: string) {
-  let id = "";
+import { workbook } from "../helpers/workbook";
+const origin = process.env.SITE_URL || "http://127.0.0.1:3001";
+async function otp(email: string, type: string) {
+  if (process.env.HOSTED_NEON_TEST === "1") {
+    const key =
+      type === "email-verification"
+        ? "HOSTED_VERIFICATION_OTP"
+        : "HOSTED_RESET_OTP";
+    const code = process.env[key];
+    if (!code)
+      throw new Error(
+        "BLOCKED: hosted OTP must be supplied securely for the isolated test identity",
+      );
+    return code;
+  }
+  let code = "";
   await expect
-    .poll(
-      async () => {
-        const res = await fetch(
-          process.env.LOCAL_MAIL_URL + "/api/v1/messages",
-        );
-        const data = await res.json();
-        const m = data.messages?.find(
-          (m: { ID: string; To: { Address: string }[] }) =>
-            m.To?.some((t) => t.Address === email),
-        );
-        id = m?.ID || "";
-        return id;
-      },
-      { timeout: 15000 },
-    )
+    .poll(async () => {
+      const r = await fetch(
+        "http://127.0.0.1:3002/test-mail?" +
+          new URLSearchParams({ email, type }),
+        { headers: { "x-test-mail-key": process.env.LOCAL_AUTH_MAIL_KEY! } },
+      );
+      code = (await r.json()).otp || "";
+      return code;
+    })
     .not.toBe("");
-  const data = await (
-    await fetch(process.env.LOCAL_MAIL_URL + "/api/v1/message/" + id)
-  ).json();
-  const text = data.HTML || data.Text || "";
-  const link = text.match(
-    /https?:\/\/[^\s"<>]+\/auth\/v1\/verify[^\s"<>]*/,
-  )?.[0];
-  expect(link).toBeTruthy();
-  return link!.replaceAll("&amp;", "&");
+  return code;
 }
-async function signup(page: Page, email: string, password: string) {
+async function account(page: Page) {
+  const email = "synthetic-" + randomUUID() + "@example.invalid";
+  const password = randomUUID() + "Aa1!";
   await page.goto("/signup");
-  await page.getByRole("textbox", { name: "Email", exact: true }).fill(email);
+  await page.getByLabel("Email", { exact: true }).fill(email);
   await page.locator("input[name=password]").fill(password);
   await page
     .getByRole("button", { name: "Create account", exact: true })
     .click();
-  await expect(page).toHaveURL(/\/login\?message=/);
-  await page.goto(await emailLink(email));
-  await expect(page).toHaveURL(/\/onboarding/, { timeout: 20000 });
-}
-test("confirmed signup → organization → CRM → import → dashboard → audit → logout → recovery", async ({
-  page,
-}) => {
-  const email = `browser-${randomUUID()}@example.invalid`;
-  const password = randomUUID() + "Aa1!";
-  await signup(page, email, password);
+  await expect(page).toHaveURL(/verify-email/);
   await page
-    .getByRole("textbox", { name: "Organization name" })
-    .fill("Synthetic browser company");
+    .locator("input[name=otp]")
+    .fill(await otp(email, "email-verification"));
+  await page.getByRole("button", { name: "Verify email", exact: true }).click();
+  await expect(page).toHaveURL(/login/);
+  await page.getByLabel("Email", { exact: true }).fill(email);
+  await page.locator("input[name=password]").fill(password);
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(page).toHaveURL(/onboarding/);
+  await page
+    .getByLabel("Organization name", { exact: true })
+    .fill("Synthetic Neon organization");
   await page
     .getByRole("button", { name: "Create organization", exact: true })
     .click();
   await expect(page).toHaveURL(/\/app$/);
+  return { email, password };
+}
+async function post(context: BrowserContext, path: string, body: unknown) {
+  return context.request.post(origin + path, {
+    headers: { origin },
+    data: body,
+  });
+}
+test("real local Better Auth OTP + PostgreSQL: CRM, transactional CSV/XLSX, audit, recovery and revoked sessions", async ({
+  page,
+  context,
+  browser,
+}) => {
+  const { email, password } = await account(page);
   await page.goto("/app/customers/new");
   await page
-    .getByRole("textbox", { name: "Customer name", exact: true })
-    .fill("Synthetic browser customer");
+    .getByLabel("Customer name", { exact: true })
+    .fill("Synthetic customer");
   await page
     .getByRole("button", { name: "Create customer", exact: true })
     .click();
-  await expect(page.getByRole("status")).toContainText("Saved");
-  await page.goto("/app/contacts/new");
+  await expect(page.getByRole("status")).toHaveText("Saved");
+  const customerId = new URL(page.url()).pathname.split("/").at(-1)!;
+  const offer = {
+    customer_id: customerId,
+    primary_contact_id: "",
+    title: "Manual exact offer",
+    external_reference: "",
+    amount: "1200.1234",
+    currency: "EUR",
+    status: "sent",
+    sent_at: "2026-01-01",
+    notes: "",
+  };
+  const created = await post(context, "/api/crm/offers", offer);
+  expect(created.status()).toBe(200);
+  const offerId = (await created.json()).id;
+  await page.goto("/app/offers/" + offerId);
+  await expect(page.locator("input[name=amount]")).toHaveValue("1200.1234");
   await page
-    .getByRole("combobox", { name: "Customer", exact: true })
-    .selectOption({ label: "Synthetic browser customer" });
-  await page
-    .getByRole("textbox", { name: "Full name", exact: true })
-    .fill("Synthetic Contact");
-  await page
-    .getByRole("textbox", { name: "Email", exact: true })
-    .fill("contact@example.invalid");
-  await page
-    .getByRole("button", { name: "Create contact", exact: true })
-    .click();
-  await expect(page.getByRole("status")).toContainText("Saved");
-  await page.goto("/app/offers/new");
-  await page
-    .getByRole("combobox", { name: "Customer", exact: true })
-    .selectOption({ label: "Synthetic browser customer" });
-  await page
-    .getByRole("textbox", { name: "Offer title", exact: true })
-    .fill("Synthetic browser offer");
-  await page.locator("input[name=amount]").fill("1200.1234");
-  await page
-    .getByRole("combobox", { name: "Status", exact: true })
-    .selectOption("sent");
-  await page.locator("input[name=sent_at]").fill("2026-01-01");
-  await page.getByRole("button", { name: "Create offer", exact: true }).click();
-  await expect(page.getByRole("status")).toContainText("Saved");
-  const offerUrl = page.url().split("?")[0];
-  await page
-    .getByRole("textbox", { name: "Description", exact: true })
+    .getByLabel("Description", { exact: true })
     .fill("Synthetic manual note");
   await page
     .getByRole("button", { name: "Record activity", exact: true })
     .click();
-  await expect(
-    page.locator(".timeline li").filter({ hasText: "Synthetic manual note" }),
-  ).toBeVisible();
-  await page.goto("/app/imports");
-  const csv =
-    "customer_name,offer_title,offer_value,currency,offer_status,sent_at,external_reference\n" +
-    Array.from(
-      { length: 100 },
-      (_, i) =>
-        `CSV Synthetic ${i},CSV Offer ${i},1200.50,EUR,sent,2026-01-01,browser-${i}`,
-    ).join("\n");
-  await expect(page.locator("input[type=file]")).toBeEnabled();
-  await page.locator("input[type=file]").setInputFiles({
-    name: "synthetic100.csv",
-    mimeType: "text/csv",
-    buffer: Buffer.from(csv),
-  });
-  await page.getByRole("button", { name: "Inspect file & preview" }).click();
-  await expect(
-    page.getByText("100 valid · 0 invalid", { exact: false }),
-  ).toBeVisible();
-  await page.getByRole("button", { name: "Confirm & commit 100 rows" }).click();
-  await expect(
-    page.getByRole("heading", { name: "Import completed" }),
-  ).toBeVisible();
-  await expect(page.getByRole("status")).toContainText("100 created");
-  await page.goto("/app/imports");
-  await page.locator("input[type=file]").setInputFiles({
-    name: "synthetic100.xlsx",
-    mimeType:
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    buffer: workbook(100),
-  });
-  await page
-    .getByRole("combobox", { name: "Number format", exact: true })
-    .selectOption("us");
-  await page.getByRole("button", { name: "Inspect file & preview" }).click();
-  await expect(
-    page.getByText("100 valid · 0 invalid", { exact: false }),
-  ).toBeVisible();
-  await page.getByRole("button", { name: "Confirm & commit 100 rows" }).click();
-  await expect(
-    page.getByRole("heading", { name: "Import completed" }),
-  ).toBeVisible();
-  await expect(page.getByRole("status")).toContainText("100 created");
+  await expect(page.getByRole("status")).toHaveText("Manual activity logged");
+  await expect(page.locator(".timeline")).toContainText(
+    "Synthetic manual note",
+  );
+  for (const xlsx of [false, true]) {
+    await page.goto("/app/imports");
+    const input = page.locator("input[type=file]");
+    await expect(input).toBeEnabled();
+    const csv =
+      "customer_name,offer_title,offer_value,currency,offer_status,sent_at,external_reference\n" +
+      Array.from(
+        { length: 100 },
+        (_, i) =>
+          `CSV Synthetic ${i},Offer ${i},1200.50,EUR,sent,2026-01-01,csv-${i}`,
+      ).join("\n");
+    await input.setInputFiles({
+      name: xlsx ? "synthetic.xlsx" : "synthetic.csv",
+      mimeType: xlsx
+        ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        : "text/csv",
+      buffer: xlsx ? workbook(100) : Buffer.from(csv),
+    });
+    if (xlsx)
+      await page
+        .getByRole("combobox", { name: "Number format", exact: true })
+        .selectOption("us");
+    await page.getByRole("button", { name: "Inspect file & preview" }).click();
+    await expect(
+      page.getByText("100 valid · 0 invalid", { exact: false }),
+    ).toBeVisible();
+    await page
+      .getByRole("button", { name: "Confirm & commit 100 rows" })
+      .click();
+    await expect(
+      page.getByRole("heading", { name: "Import completed" }),
+    ).toBeVisible();
+    await expect(page.getByRole("status")).toContainText("100 created");
+  }
   await page.goto("/app");
   await expect(page.getByText("201", { exact: true }).first()).toBeVisible();
   await page.getByRole("button", { name: "Advanced", exact: true }).click();
@@ -152,167 +148,128 @@ test("confirmed signup → organization → CRM → import → dashboard → aud
   await expect(
     page.getByText("Import · Updated", { exact: true }).first(),
   ).toBeVisible();
-  await page.goto(offerUrl);
-  await page.locator("input[name=title]").fill("Edited synthetic offer");
-  await page.getByRole("button", { name: "Save changes", exact: true }).click();
-  await expect(
-    page.getByRole("heading", { name: "Edited synthetic offer" }),
-  ).toBeVisible();
-  await page.getByRole("checkbox", { name: "I confirm this change" }).check();
-  await page
-    .getByRole("button", { name: "Archive record", exact: true })
-    .click();
-  await expect(
-    page.getByText("Archived · restore below", { exact: false }),
-  ).toBeVisible();
-  await page.getByRole("checkbox", { name: "I confirm this change" }).check();
-  await page
-    .getByRole("button", { name: "Restore record", exact: true })
-    .click();
-  await expect(page.getByRole("status")).toContainText("Archive state updated");
+  // Save a second live session to prove reset revokes it at the provider, not just locally.
+  const second = await browser.newContext();
+  const p2 = await second.newPage();
+  await p2.goto(origin + "/login");
+  await p2.getByLabel("Email", { exact: true }).fill(email);
+  await p2.locator("input[name=password]").fill(password);
+  await p2.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(p2).toHaveURL(/\/app$/);
   await page.goto("/app/settings");
   await expect(page.getByText("Payments not yet enabled.")).toBeVisible();
   await page.getByRole("button", { name: "Sign out", exact: true }).click();
-  await expect(page).toHaveURL(/\/login/);
   await page.goto("/forgot-password");
-  await page.getByRole("textbox", { name: "Email", exact: true }).fill(email);
+  await page.getByLabel("Email", { exact: true }).fill(email);
+  await page.getByRole("button", { name: "Send reset code" }).click();
+  await expect(page).toHaveURL(/reset-password/);
   await page
-    .getByRole("button", { name: "Send recovery link", exact: true })
-    .click();
-  await expect(page.getByRole("status")).toContainText("If the account exists");
-  await page.goto(await emailLink(email));
-  await expect(page).toHaveURL(/\/reset-password/, { timeout: 20000 });
+    .locator("input[name=otp]")
+    .fill(await otp(email, "forget-password"));
   await page.locator("input[name=password]").fill(password + "new");
   await page.getByRole("button", { name: "Update password" }).click();
-  await expect(page).toHaveURL(/\/login\?message=Password/);
-  await page.getByRole("textbox", { name: "Email", exact: true }).fill(email);
+  await expect(page).toHaveURL(/login\?message=Password/);
+  const revoked = await second.request.get(origin + "/api/crm/customers");
+  expect(revoked.status()).toBe(401);
+  await second.close();
+  await page.getByLabel("Email", { exact: true }).fill(email);
   await page.locator("input[name=password]").fill(password + "new");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page).toHaveURL(/\/app$/);
-  await page.screenshot({
-    path: "test-results/connected-workspace.png",
-    fullPage: true,
-  });
 });
-
-test("guessed tenant IDs and unauthenticated direct Server Action replay are rejected", async ({
-  page,
+test("two real users/organizations: REST, browser, direct action and CSRF isolation", async ({
+  browser,
   request,
 }) => {
-  const email = `browser-guard-${randomUUID()}@example.invalid`;
-  await signup(page, email, randomUUID() + "Aa1!");
-  await page
-    .getByRole("textbox", { name: "Organization name" })
-    .fill("Synthetic guarded company");
-  await page
-    .getByRole("button", { name: "Create organization", exact: true })
-    .click();
-  await expect(page).toHaveURL(/\/app$/);
-  await page.goto("/app/customers/new");
-  await page
-    .getByRole("textbox", { name: "Customer name", exact: true })
-    .fill("Guarded customer");
-  const pending = page.waitForRequest(
+  const a = await browser.newContext(),
+    b = await browser.newContext();
+  const pa = await a.newPage(),
+    pb = await b.newPage();
+  await account(pa);
+  await account(pb);
+  const customer = {
+    display_name: "Synthetic private customer",
+    customer_type: "company",
+    external_reference: "",
+    website: "",
+    notes: "",
+  };
+  const made = await post(b, "/api/crm/customers", customer);
+  expect(made.status()).toBe(200);
+  const bid = (await made.json()).id;
+  expect(
+    (await a.request.get(origin + "/api/crm/customers/" + bid)).status(),
+  ).toBe(404);
+  const other = await b.request.get(origin + "/api/crm/customers/" + bid);
+  const row = await other.json();
+  expect(
+    (
+      await post(a, "/api/crm/customers/" + bid, {
+        ...customer,
+        version: row.updated_at,
+      })
+    ).status(),
+  ).toBe(409);
+  const forged = await post(a, "/api/crm/contacts", {
+    customer_id: bid,
+    full_name: "Forged",
+    email: "",
+    phone: "",
+    position: "",
+  });
+  expect(forged.status()).toBeGreaterThanOrEqual(400);
+  expect(
+    (await a.request.get(origin + "/api/crm/organization_members")).status(),
+  ).toBe(404);
+  expect((await request.get(origin + "/api/crm/customers")).status()).toBe(401);
+  expect(
+    (
+      await a.request.post(origin + "/api/crm/customers", {
+        headers: { origin: "https://evil.invalid" },
+        data: customer,
+      })
+    ).status(),
+  ).toBe(403);
+  await pa.goto("/app/customers/" + bid);
+  await expect(
+    pa.getByRole("heading", { name: "This page could not be found." }),
+  ).toBeVisible();
+  await expect(
+    pa.getByText("Synthetic private customer", { exact: true }),
+  ).toHaveCount(0);
+  await pa.goto("/app/customers/new");
+  await pa
+    .getByLabel("Customer name", { exact: true })
+    .fill("Action guard synthetic");
+  const pending = pa.waitForRequest(
     (r) =>
       r.method() === "POST" &&
       new URL(r.url()).pathname === "/app/customers/new",
   );
-  await page
+  await pa
     .getByRole("button", { name: "Create customer", exact: true })
     .click();
-  const action = await pending;
-  await expect(page.getByRole("status")).toContainText("Saved");
-  const headers = await action.allHeaders();
-  const safeHeaders = Object.fromEntries(
+  const captured = await pending;
+  await expect(pa.getByRole("status")).toHaveText("Saved");
+  const h = await captured.allHeaders();
+  const safe = Object.fromEntries(
     ["content-type", "next-action", "next-router-state-tree", "accept"]
-      .filter((k) => headers[k])
-      .map((k) => [k, headers[k]]),
+      .filter((k) => h[k])
+      .map((k) => [k, h[k]]),
   );
-  safeHeaders.origin = "http://127.0.0.1:3001";
-  const response = await request.post("/app/customers/new", {
-    headers: safeHeaders,
-    data: action.postDataBuffer()!,
+  const replay = await request.post(origin + "/app/customers/new", {
+    headers: { ...safe, origin },
+    data: captured.postDataBuffer()!,
     maxRedirects: 0,
   });
   expect(
-    response.headers()["x-action-redirect"] ||
-      response.headers().location ||
-      "",
+    replay.headers()["x-action-redirect"] || replay.headers().location || "",
   ).toContain("/login");
-  const importResponse = await request.post("/api/imports", {
-    headers: { origin: "http://127.0.0.1:3001" },
-    multipart: { action: "commit" },
-    maxRedirects: 0,
-  });
-  expect(importResponse.headers().location || "").toContain("/login");
-  const { createClient } = await import("@supabase/supabase-js");
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-  expect(new URL(url).hostname).toBe("127.0.0.1");
-  expect(new URL(url).port).toBe("55421");
-  const admin = createClient(url, process.env.LOCAL_SUPABASE_SECRET_KEY!, {
-    auth: { persistSession: false },
-  });
-  const bEmail = `guard-b-${randomUUID()}@example.invalid`,
-    bPassword = randomUUID() + "Aa1!";
-  const created = await admin.auth.admin.createUser({
-    email: bEmail,
-    password: bPassword,
-    email_confirm: true,
-  });
-  expect(created.error).toBeNull();
-  const b = createClient(
-    url,
-    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
-    { auth: { persistSession: false } },
-  );
+  await pa.setViewportSize({ width: 390, height: 844 });
+  await pa.goto("/app/customers");
   expect(
-    (await b.auth.signInWithPassword({ email: bEmail, password: bPassword }))
-      .error,
-  ).toBeNull();
-  const oid = randomUUID();
-  expect(
-    (
-      await b.rpc("create_organization", {
-        p_name: "Tenant B synthetic",
-        p_currency: "EUR",
-        p_request: oid,
-      })
-    ).error,
-  ).toBeNull();
-  const other = await b
-    .from("customers")
-    .insert({
-      organization_id: oid,
-      display_name: "B private synthetic customer",
-    })
-    .select("id")
-    .single();
-  expect(other.error).toBeNull();
-  const guessed = await page.goto("/app/customers/" + other.data!.id);
-  // Next streams a notFound boundary after the shell; streamed errors may retain HTTP 200.
-  expect([200, 404]).toContain(guessed?.status());
-  await expect(
-    page.getByRole("heading", { name: "This page could not be found." }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "Save changes", exact: true }),
-  ).toHaveCount(0);
-  await expect(
-    page.getByText("B private synthetic customer", { exact: true }),
-  ).toHaveCount(0);
-  await page.goto("/app/customers");
-  await expect(page.locator("tbody tr")).toHaveCount(1);
-  await expect(
-    page.getByRole("link", { name: "Guarded customer", exact: true }),
-  ).toBeVisible();
-  await page.setViewportSize({ width: 390, height: 844 });
-  expect(
-    await page.evaluate(
-      () => document.documentElement.scrollWidth <= window.innerWidth,
-    ),
+    await pa.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
   ).toBe(true);
-  await page.screenshot({
-    path: "test-results/connected-mobile-customers.png",
-    fullPage: true,
-  });
+  await a.close();
+  await b.close();
 });

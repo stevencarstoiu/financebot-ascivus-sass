@@ -11,22 +11,11 @@ export default async function New({
 }) {
   const { entity } = await params;
   if (!isEntity(entity)) notFound();
-  const { client, org } = await workspace();
+  const { store, org } = await workspace();
   const s = await searchParams;
-  const [{ data: customers }, { data: contacts }] = await Promise.all([
-    client
-      .from("customers")
-      .select("id,display_name,archived_at")
-      .eq("organization_id", org.id)
-      .order("display_name")
-      .limit(1000),
-    client
-      .from("contacts")
-      .select("id,full_name,customer_id")
-      .eq("organization_id", org.id)
-      .is("archived_at", null)
-      .order("full_name")
-      .limit(1000),
+  const [customers, contacts] = await Promise.all([
+    store.customers(),
+    store.contacts(),
   ]);
   return (
     <>

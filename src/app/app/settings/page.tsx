@@ -7,12 +7,8 @@ export default async function Settings({
 }: {
   searchParams: Promise<{ message?: string }>;
 }) {
-  const { client, org, user, role, memberships } = await workspace();
-  const { data: profile } = await client
-    .from("profiles")
-    .select("display_name")
-    .eq("user_id", user.id)
-    .maybeSingle();
+  const { store, org, role, memberships } = await workspace();
+  const profile = await store.profile();
   const { message } = await searchParams;
   return (
     <>

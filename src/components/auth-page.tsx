@@ -1,6 +1,8 @@
 import Link from "next/link";
+import { cookies } from "next/headers";
 import { authenticate } from "@/app/auth/actions";
-import { configured } from "@/lib/supabase";
+import { authConfigured } from "@/lib/auth/server";
+import { Submit } from "./submit";
 export async function AuthPage({
   kind,
   searchParams,
@@ -9,16 +11,19 @@ export async function AuthPage({
   searchParams: Promise<{ message?: string }>;
 }) {
   const { message } = await searchParams;
+  const pending = (await cookies()).get("auth-email")?.value || "";
   const title =
     kind === "signup"
       ? "Create your workspace"
-      : kind === "forgot-password"
-        ? "Recover your account"
-        : kind === "reset-password"
-          ? "Set a new password"
-          : "Welcome back";
+      : kind === "verify-email"
+        ? "Verify your email"
+        : kind === "forgot-password"
+          ? "Recover your account"
+          : kind === "reset-password"
+            ? "Set a new password"
+            : "Welcome back";
   return (
-    <main className="auth-wrap">
+    <main id="main" className="auth-wrap">
       <Link href="/" className="wordmark">
         ASCIVUS <small>Sales workspace · working title</small>
       </Link>
@@ -33,7 +38,7 @@ export async function AuthPage({
             {message}
           </p>
         )}
-        {!configured() ? (
+        {!authConfigured() ? (
           <p role="alert" className="notice">
             Authentication unavailable in this environment.{" "}
             <Link href="/demo">Explore the fictional demo</Link>.
@@ -41,19 +46,49 @@ export async function AuthPage({
         ) : (
           <form action={authenticate}>
             <input type="hidden" name="kind" value={kind} />
-            {kind !== "reset-password" && (
+            <label>
+              Email
+              <input
+                required
+                type="email"
+                name="email"
+                autoComplete="email"
+                maxLength={254}
+                defaultValue={
+                  ["verify-email", "reset-password"].includes(kind)
+                    ? pending
+                    : ""
+                }
+              />
+            </label>
+            {kind === "signup" && (
               <label>
-                Email
+                Display name
                 <input
-                  required
-                  type="email"
-                  name="email"
-                  autoComplete="email"
-                  maxLength={254}
+                  name="display_name"
+                  maxLength={120}
+                  autoComplete="name"
                 />
               </label>
             )}
-            {kind !== "forgot-password" && (
+            {["verify-email", "reset-password"].includes(kind) && (
+              <label>
+                One-time code
+                <input
+                  required
+                  name="otp"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  pattern="[0-9]{6}"
+                  maxLength={6}
+                />
+                <small>
+                  Use the code from your email. Codes expire and attempts are
+                  limited.
+                </small>
+              </label>
+            )}
+            {!["forgot-password", "verify-email"].includes(kind) && (
               <label>
                 Password
                 <input
@@ -69,15 +104,24 @@ export async function AuthPage({
                 <small>At least 12 characters</small>
               </label>
             )}
-            <button className="button">
+            <Submit>
               {kind === "signup"
                 ? "Create account"
-                : kind === "forgot-password"
-                  ? "Send recovery link"
-                  : kind === "reset-password"
-                    ? "Update password"
-                    : "Sign in"}
-            </button>
+                : kind === "verify-email"
+                  ? "Verify email"
+                  : kind === "forgot-password"
+                    ? "Send reset code"
+                    : kind === "reset-password"
+                      ? "Update password"
+                      : "Sign in"}
+            </Submit>
+          </form>
+        )}
+        {kind === "verify-email" && authConfigured() && (
+          <form action={authenticate}>
+            <input type="hidden" name="kind" value="resend" />
+            <input type="hidden" name="email" value={pending} />
+            <button className="secondary">Request new verification code</button>
           </form>
         )}
         <div className="inline-links">

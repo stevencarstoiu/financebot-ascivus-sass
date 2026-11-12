@@ -1,43 +1,30 @@
-# Phase 1 status
+# Phase 1 — Neon Free status
 
-Implementation target: `/workspace/ascivus-sales-saas`, local Git branch `phase-1`. Source and original selected checkout remain unchanged. Working title only; no final brand published.
+Work is exclusive to `phase-1-neon-free`, based on existing remote commit `1b7a96a769c0abf67ab47e403f965280b6b34f7f`. `main`, `phase-1`, BotLab and unrelated checkouts are preserved. Exact publication commit/push evidence is reported in the final handoff after the gates pass.
 
-**Local workspace implemented and functionally verified. Preview: NOT DEPLOYED.** Publication target: the EXISTING `https://github.com/stevencarstoiu/financebot-ascivus-sass` repository, branch `phase-1`. The publication commit descends from existing `main`; no new repository is created and `main` is not pushed. Final push status and exact SHA are reported after verification. Separate hosted Supabase and Vercel credentials remain absent.
+| Module | Status | Evidence / limits |
+| --- | --- | --- |
+| Provider replacement | DONE locally | No Supabase/PostgREST dependency, client, auth.uid stub or active migration remains. Server-only Managed Better Auth protocol adapter + parameterized pg repository. |
+| Auth / onboarding | DONE locally; hosted BLOCKED | Actual local Better Auth OTP/password/reset/revocation browser journey. Managed endpoint is supplied, but secure DB/cookie bindings and outbound access have not been observed. |
+| Organization / RBAC / tenant isolation | DONE locally | Independent opaque-subject mapping, constrained runtime role, per-operation verified context, RLS, composite keys, private helpers and last-owner protection; 60 SQL checks plus two-user REST/browser. |
+| CRM | DONE locally | Customers/contacts/offers, search/filter/page, edit/archive/restore, exact values, stale-write conditions and manual activities. Existing UI retained. |
+| CSV/XLSX imports | DONE locally | Bounded parser/mapping/preview/dedupe, atomic app transaction, DB idempotency/locks/history/error reports. 100/1,000-row parser/SQL; 100-row CSV and XLSX browser commits. |
+| Dashboards | DONE locally | SQL aggregates by original currency, derived follow-up, Basic/Advanced and persisted preference, real priority/history/filter queries. |
+| Audit / history | DONE locally | No runtime audit insert/edit/delete/truncate or trigger/RLS alteration; transactional actor/status/member/import events, redaction, failed-write rollback checks. Not administrator-proof. |
+| Fictional demo | DONE locally | Isolated memory fixtures, read-only, no database/auth connection; responsive browser smoke checks retained. |
+| Billing-ready | DONE, inactive | Typed preview entitlement catalog and DB caps retained. No Stripe/customer/paid AI/outreach is enabled. |
+| CI / hosted / $0 Preview | PARTIAL / BLOCKED | Local CI/test tooling and hosted-isolated harness prepared. Neon published Free limits verified from official source. Render docs/account limits and actual hosted deployment not verified; candidate plan-free config must not be applied yet. |
 
-| # | Required feature | Status | Evidence / limit |
-| --- | --- | --- | --- |
-| 1 | Isolated project / existing Git target | DONE locally | Isolated sibling checkout and pinned lockfile. Publication branch is based on the existing financebot repository main; the original completed local commit is retained on local/completed-phase-1. |
-| 2 | Authentication | DONE (local) | Real local Supabase signup, mail-catcher confirmation, login/logout, generic recovery, reset and new-password login through browser. Hosted delivery NOT RUN. |
-| 3 | Organizations / isolation | DONE (local) | Atomic ownership, role model, all-table RLS, composite FKs, invoker view/RPCs, owner protection. SQL and two real authenticated REST identities verified. Hosted checks NOT RUN. |
-| 4 | Mini CRM | DONE (local) | Customer/contact/offer create/edit/archive/restore, search/pagination/filters/sort, searchable relationships, stale-edit condition, manual activity. Full connected browser journey verified. |
-| 5 | CSV/XLSX import | DONE (local) | Bounded parsing/mapping/preview/validation, explicit duplicate modes, atomic DB commit/idempotency/history/report, cleanup command. 100/1,000 rows of each format in parser tests; real 100-row CSV + 100-row XLSX browser imports. Automatic TTL scheduler not provisioned. |
-| 6 | Real dashboards | DONE (local) | SQL aggregates, exact amounts by currency, priority rule, modes/persistence, advanced filters, age/cohort/closed conversion, bounded CSV export. Synthetic and real browser assertions. |
-| 7 | Audit / commercial timeline | DONE (local) | Separate append-only tables; actor attribution and status events; DB boundary triggers for records/imports/membership; wall-clock ordering. Rollback/immutability verified. |
-| 8 | Fictional demo | DONE | In-memory read-only `/demo`, offers/details/filters/modes, explicit fiction labels; browser verifies zero Supabase/payment/AI requests. |
-| 9 | Billing-ready interfaces | DONE (inactive) | Typed preview plan, feature entitlement resolution, DB usage caps, BillingProvider boundary, honest settings; no checkout, trial billing, webhooks or Stripe calls. |
-| 10 | Tests, CI, security, Preview | PARTIAL | Local lint/typecheck/unit/SQL/build/browser/Auth/REST verified; CI definition committed. GitHub-hosted CI and hosted Preview NOT RUN/BLOCKED. |
+## Known external blockers
 
-## Verification record
+No actual DATABASE_URL (restricted runtime), DATABASE_MIGRATION_URL (separate admin) or NEON_AUTH_COOKIE_SECRET is currently bound in the running environment. The supplied Managed Auth URL is not a credential; it alone cannot perform database or authenticated acceptance tests. Environment metadata currently shows no ready variable/secret bindings. No hosted migration or destructive command has been run.
 
-- Frozen clean install: `npm ci` **PASS** (413 packages); lint, strict typecheck, all 29 unit tests and production build **PASS** afterward.
-- Unit: **29 PASS**, 2 files, including 100/1,000-row CSV and XLSX and malicious archive cases.
-- PostgreSQL: **52 PASS assertions/denials**, full migrations on disposable PostgreSQL 17; 100-row + 1,000-row transactions; exact decimals, FK/RLS/role/audit/rollback/idempotency/TTL maintenance. Representative indexed priority query at 1,101 offers: approximately 0.08 ms in this local run, not a performance guarantee.
-- Connected: real local Supabase Auth/REST two-identity checks **PASS**; **2 browser tests PASS** through saved `npm run test:connected` with documented cloud proxy health workaround. Full CSV/XLSX + recovery journey, direct unauthenticated Server Action replay/import rejection, guessed tenant ID data denial and mobile record-list layout.
-- Public/demo: **6 browser tests PASS**, desktop/mobile against the final optimized production build.
-- `npm audit`: **0 known vulnerabilities** after transitive minimatch override; all direct dependencies pinned.
-- Lint, strict typecheck and optimized production build **PASS** after clean install. Source secret-pattern scan **PASS**. Hosted readiness remains unverified.
+Auth and official Render documentation requests received outbound-policy 403. Additive domains/variable names were saved to the environment draft, not silently applied. The user must securely fill settings, review/save and publish the environment as required, then fresh connectivity/role checks can resume. PostgreSQL network permissions depend on the actual DB hostname, still unavailable without the binding.
 
-## Important fixes from tests
+Preview: NOT DEPLOYED. No Render account credential/authorization is configured, current Render Free limits cannot yet be verified, and no provider returned a Preview URL. No paid fallback, paid overages, automatic upgrade, production deployment or real customer email was attempted. See PREVIEW_DEPLOYMENT for exact $0 gates and operator steps.
 
-Metrics SQL reserved alias; generic trigger field access; callback redirect used internal bind host; tied audit timestamps; last-owner update behavior; pre-hydration file input readiness; exact numeric/nullable RPC generated types; correct streamed notFound assertions. No test assertions disabled. A streamed notFound response can retain status 200; tests assert the notFound boundary, no record form and no other tenant's content.
+## Validation boundaries
 
-## Remaining release/operational gates
+Final local validation PASS: npm ci, audit (0 known vulnerabilities), lint, typecheck, 31 unit tests, optimized production build, 60 SQL checks, additive migration checksum/repeatability, six desktop/mobile public tests and two actual local Auth/browser tests. Hosted-isolated tests remain BLOCKED / NOT RUN, not passed. Local SQL tests do not assert independent provider identity attestation; server-verified context is trusted and its private DB credential must remain protected.
 
-- Provision/designate a separate non-production Supabase and Vercel Preview; configure target-only variables and exact auth redirects; run hosted acceptance/isolation. Git publication uses only the existing financebot repository. See PREVIEW_DEPLOYMENT.
-- Configure hosted test-only SMTP delivery, provider/WAF abuse limits, refresh/caching checks, staging cleanup scheduler, backups/retention/monitoring and legal review. Local relaxed mail rates are test-only. No paid infrastructure or production action authorized by this delivery.
-- Verify hosting's actual body limit; it may be below application 5 MB. Never advertise unsupported limits.
-- Audit is append-only for ordinary users, not tamper-proof against privileged DB operators. No legal/security/production-scale certification.
-- UI filter dropdowns show at most 1,000 customers; record relationship pickers search all records (30 results at a time). Details/timelines show bounded recent related records. Export caps at 1,000 active offers. UTC defines calendar-day follow-up. These bounds are intentional and documented; richer export/history navigation remains future work.
-- Team invitations/management, live payments, AI/mailbox integrations and automatic outreach are explicitly out of Phase 1 scope.
-
-Major locations: `supabase/migrations/`; `src/app/app/`; `src/app/auth/`; `src/features/imports/` and `src/app/api/imports/`; `src/features/dashboard/`; `src/features/demo/`; `src/features/billing/`; `tests/unit/`, `tests/integration/`, `tests/e2e/`; `.github/workflows/ci.yml`.
+No Supabase/business data export is assumed. Any future approved record move needs a verified identity map and a separate data-transfer run; never touch BotLab sessions/customer data. Imported staging cleanup is manual/explicitly scheduled after 24h; no automatic cleanup claim. Legal notices remain drafts; hosted abuse limits, backups/retention/monitoring, upload size/memory ceilings and real-email delivery require operator verification. Current bounded export/history/filter limits remain documented in ARCHITECTURE and IMPORT_SPEC.

@@ -15,59 +15,16 @@ export default async function Detail({
 }) {
   const { entity, id } = await params;
   if (!isEntity(entity) || !z.uuid().safeParse(id).success) notFound();
-  const { client, org } = await workspace();
-  const query =
-    entity === "offers"
-      ? client.from("offer_records").select("*")
-      : entity === "customers"
-        ? client.from("customers").select("*")
-        : client.from("contacts").select("*");
-  const { data, error } = await query
-    .eq("organization_id", org.id)
-    .eq("id", id)
-    .single();
-  if (error || !data) notFound();
-  const row = data as unknown as Row;
-  const [{ data: customers }, { data: contacts }, s] = await Promise.all([
-    client
-      .from("customers")
-      .select("id,display_name,archived_at")
-      .eq("organization_id", org.id)
-      .order("display_name")
-      .limit(1000),
-    client
-      .from("contacts")
-      .select("id,full_name,customer_id")
-      .eq("organization_id", org.id)
-      .eq("customer_id", entity === "customers" ? id : row.customer_id!)
-      .order("full_name")
-      .limit(1000),
-    searchParams,
+  const { store, org } = await workspace();
+  const row = await store.record(entity, id);
+  if (!row) notFound();
+  const s = await searchParams;
+  const [customers, contacts, relatedOffers, timeline] = await Promise.all([
+    store.customers(),
+    store.contacts(entity === "customers" ? id : row.customer_id || undefined),
+    entity === "customers" ? store.relatedOffers(id) : Promise.resolve([]),
+    entity === "offers" ? store.activity(id) : Promise.resolve([]),
   ]);
-  const relatedOffers =
-    entity === "customers"
-      ? (
-          await client
-            .from("offers")
-            .select("id,title,status")
-            .eq("organization_id", org.id)
-            .eq("customer_id", id)
-            .order("updated_at", { ascending: false })
-            .limit(25)
-        ).data || []
-      : [];
-  const timeline =
-    entity === "offers"
-      ? (
-          await client
-            .from("activities")
-            .select("*")
-            .eq("organization_id", org.id)
-            .eq("offer_id", id)
-            .order("occurred_at", { ascending: false })
-            .limit(50)
-        ).data || []
-      : [];
   return (
     <>
       <Link href={"/app/" + entity}>← All {entity}</Link>

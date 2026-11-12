@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { workspace } from "@/lib/workspace";
-import { isEntity, title, money, labels, type Row } from "@/lib/crm";
+import { isEntity, title, money, labels } from "@/lib/crm";
 import { needsFollowup, statuses } from "@/lib/validation";
 export default async function Records({
   params,
@@ -12,78 +12,10 @@ export default async function Records({
 }) {
   const { entity } = await params;
   if (!isEntity(entity)) notFound();
-  const { client, org } = await workspace();
+  const { store, org } = await workspace();
   const s = await searchParams;
-  const page = Math.max(1, Math.min(10000, Math.floor(Number(s.page)) || 1));
-  const field =
-    entity === "customers"
-      ? "display_name"
-      : entity === "contacts"
-        ? "full_name"
-        : "title";
-  let offerQuery = client
-    .from("offer_records")
-    .select("*", { count: "exact" })
-    .eq("organization_id", org.id);
-  if (entity === "offers") {
-    if (statuses.includes(s.status as (typeof statuses)[number]))
-      offerQuery = offerQuery.eq("status", s.status!);
-    if (s.currency && /^[A-Z]{3}$/.test(s.currency))
-      offerQuery = offerQuery.eq("currency", s.currency);
-    if (s.customer && /^[0-9a-f-]{36}$/i.test(s.customer))
-      offerQuery = offerQuery.eq("customer_id", s.customer);
-    if (s.from && /^\d{4}-\d{2}-\d{2}$/.test(s.from))
-      offerQuery = offerQuery.gte("sent_at", s.from);
-    if (s.to && /^\d{4}-\d{2}-\d{2}$/.test(s.to))
-      offerQuery = offerQuery.lte("sent_at", s.to + "T23:59:59Z");
-    if (s.followup === "yes") {
-      const cutoff = new Date();
-      cutoff.setUTCDate(cutoff.getUTCDate() - org.followup_after_days);
-      offerQuery = offerQuery
-        .eq("status", "sent")
-        .is("first_response_at", null)
-        .lte("sent_at", cutoff.toISOString().slice(0, 10) + "T23:59:59Z");
-    }
-  }
-  let query =
-    entity === "offers"
-      ? offerQuery
-      : entity === "customers"
-        ? client
-            .from("customers")
-            .select("*", { count: "exact" })
-            .eq("organization_id", org.id)
-        : client
-            .from("contacts")
-            .select("*", { count: "exact" })
-            .eq("organization_id", org.id);
-  if (s.archived === "yes") query = query.not("archived_at", "is", null);
-  else query = query.is("archived_at", null);
-  if (s.q)
-    query = query.ilike(
-      field,
-      "%" + s.q.replace(/[%_\\]/g, "").slice(0, 120) + "%",
-    );
-  query = query
-    .order(s.sort === "name" ? field : "updated_at", {
-      ascending: s.sort === "name",
-    })
-    .order("id")
-    .range((page - 1) * 25, page * 25 - 1);
-  const { data, error, count } = await query;
-  if (error) throw new Error("Records unavailable");
-  const rows = (data || []) as unknown as Row[];
-  const customerList =
-    entity === "offers"
-      ? (
-          await client
-            .from("customers")
-            .select("id,display_name")
-            .eq("organization_id", org.id)
-            .order("display_name")
-            .limit(1000)
-        ).data || []
-      : [];
+  const { rows, count, page } = await store.records(entity, s);
+  const customerList = entity === "offers" ? await store.customers() : [];
   const href = (p: number) => {
     const next = new URLSearchParams(
       Object.entries(s).filter(
@@ -149,7 +81,7 @@ export default async function Records({
               <select name="customer" defaultValue={s.customer}>
                 <option value="">All customers</option>
                 {customerList.map((c) => (
-                  <option key={c.id} value={c.id}>
+                  <option key={c.id} value={c.id!}>
                     {c.display_name}
                   </option>
                 ))}

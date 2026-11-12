@@ -1,44 +1,49 @@
 import "server-only";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { db, configured } from "./supabase";
+import { principal, authConfigured } from "./auth/server";
+import { repo } from "./repository";
+import { AccessError } from "./db";
 export async function identity() {
-  if (!configured())
+  if (!authConfigured())
     redirect("/login?message=Authentication+unavailable+in+this+environment");
-  const client = await db();
-  const {
-    data: { user },
-    error,
-  } = await client.auth.getUser();
-  if (error || !user) redirect("/login");
-  return { client, user };
+  const who = await principal();
+  if (!who) redirect("/login");
+  const store = repo(who, null);
+  const context = await store.context();
+  return { who, store, user: context.user };
 }
 export async function workspace() {
-  const { client, user } = await identity();
+  const { who, user } = await identity();
   const selected = (await cookies()).get("sales-org")?.value;
-  const { data, error } = await client
-    .from("organization_members")
-    .select(
-      "organization_id,role,organizations(id,name,default_currency,followup_after_days)",
-    )
-    .eq("user_id", user.id);
-  if (error)
-    throw new Error("Workspace unavailable. Check database migrations.");
-  if (!data?.length) redirect("/onboarding");
-  const member = data.find((m) => m.organization_id === selected) || data[0];
-  const { data: org, error: orgError } = await client
-    .from("organizations")
-    .select("*")
-    .eq("id", member.organization_id)
-    .single();
-  if (orgError || !org) throw new Error("Organization unavailable");
-  return { client, user, org, role: member.role, memberships: data };
+  const memberships = (await repo(who, null).context()).memberships;
+  if (!memberships.length) redirect("/onboarding");
+  const member =
+    memberships.find((m) => m.organization_id === selected) || memberships[0];
+  const store = repo(who, member.organization_id);
+  const context = await store.context();
+  if (!context.org) throw new Error("Organization unavailable");
+  return { ...context, org: context.org, user, store, who };
 }
-export function databaseError(code?: string) {
+export async function apiWorkspace() {
+  const who = await principal();
+  if (!who) throw new AccessError(401, "Authentication required");
+  const selected = (await cookies()).get("sales-org")?.value;
+  const memberships = (await repo(who, null).context()).memberships;
+  const member =
+    memberships.find((m) => m.organization_id === selected) || memberships[0];
+  if (!member) throw new AccessError(403, "Create an organization first");
+  const store = repo(who, member.organization_id);
+  const context = await store.context();
+  if (!context.org) throw new AccessError(403, "Organization unavailable");
+  return { ...context, org: context.org, store, who };
+}
+export function databaseError(error: unknown) {
+  if (error instanceof AccessError) return error.message;
+  const code = (error as { code?: string })?.code;
   if (code === "23505")
     return "This reference already exists in your organization.";
   if (code === "23503")
     return "Choose related records from this organization and customer.";
-  if (code === "40001") return "This record changed. Reload before saving.";
   return "Could not save. Check fields, permissions, and reload before retrying.";
 }

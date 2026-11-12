@@ -1,11 +1,14 @@
-name: Sales workspace checks
-on: [push, pull_request]
+name: Neon Free Sales checks
+on:
+  push:
+    branches: [phase-1-neon-free]
+  pull_request:
 permissions:
   contents: read
 jobs:
-  local:
+  verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -13,7 +16,7 @@ jobs:
           node-version: "24"
           cache: npm
       - run: npm ci
-      - run: npm audit --audit-level=moderate
+      - run: npm audit --audit-level=low
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test
@@ -21,20 +24,4 @@ jobs:
       - run: npm run test:integration
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: browser-failures
-          path: test-results/
-  connected:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          cache: npm
-      - run: npm ci
-      - run: npx playwright install --with-deps chromium
       - run: npm run test:connected

@@ -6,3 +6,6 @@ test-results/
 *.tsbuildinfo
 coverage/
 next-env.d.ts
+
+# Retained local legacy runtime state; never part of the Neon branch.
+supabase/

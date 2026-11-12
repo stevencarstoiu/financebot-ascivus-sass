@@ -10,14 +10,8 @@ function resultSummary(value: unknown) {
     : "Not committed";
 }
 export default async function Imports() {
-  const { client, org } = await workspace();
-  const { data, error } = await client
-    .from("import_jobs")
-    .select("id,file_name,status,row_count,duplicate_count,created_at,result")
-    .eq("organization_id", org.id)
-    .order("created_at", { ascending: false })
-    .limit(30);
-  if (error) throw new Error("Import history unavailable");
+  const { store } = await workspace();
+  const data = await store.imports();
   return (
     <>
       <div className="page-heading">
